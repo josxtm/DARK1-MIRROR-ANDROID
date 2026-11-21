@@ -1,0 +1,173 @@
+diff --git a/firmware/src/app/main_fm1.c b/firmware/src/app/main_fm1.c
+index 2df41e9..95873f3 100644
+--- a/firmware/src/app/main_fm1.c
++++ b/firmware/src/app/main_fm1.c
+@@ -553,6 +553,46 @@ static void px_service(void)
+     }
+ }
+ 
++/* Wait for the previous SysEx to drain and yield to pending MIDI. The USB
++ * poll sets the pace, with only one display message in the USB ring. */
++static int mirror_send(const uint8_t *message, unsigned length)
++{
++    if (mo_r != mo_w || so_r != so_w || usb_sysex_try(message, length) != 0)
++        return -2;
++    return 0;
++}
++
++static void mirror_service(void)
++{
++    static uint8_t identify;
++    static const uint8_t identity[] = {
++        0xf0, 0x7d, 'F', 'S', 3,
++        'D', 'A', 'R', 'K', '-', '1', ' ', '1', '.', '0', '.', '7', ' ', 'B', 'i', 'g', 'S', 'c', 'r', 'e', 'e', 'n',
++        ' ', 'F', 'a', 's', 't', 0xf7
++    };
++    if (mirror_request) {
++        const uint32_t flags = irq_save();
++        const uint8_t full = mirror_full_request;
++        mirror_request = mirror_full_request = 0;
++        irq_restore(flags);
++        const uint8_t hello[] = { 0xf0, 0x7d, 'F', 'S', full, 0xf7 };
++        sm_sysex(hello, sizeof hello);
++        identify = 1;
++    }
++    sm_poll(fm1_ms, mirror_send);
++    if (sm_take_full_request()) {
++        sm_length = sm_sent = 0;
++        mirror_reset();
++    }
++    if (!sm_on()) {
++        mirror_ready = 0;
++        return;
++    }
++    if (identify && mirror_send(identity, sizeof identity) == 0)
++        identify = 0;
++    mirror_stage();
++}
++
+ static uint32_t prof_clk(void) { return fm1_ticks(); }
+ static void tel_service(void)
+ {
+@@ -835,6 +875,7 @@ static void fm1_main(void)
+         tel_service();
+         dx_service();
+         px_service();
++        mirror_service();
+         main_where = 0;
+         if (usb.ota_req) {
+             usb.ota_req = 0;
+diff --git a/firmware/src/app/ui.c b/firmware/src/app/ui.c
+index f8e7fbb..2703c9b 100644
+--- a/firmware/src/app/ui.c
++++ b/firmware/src/app/ui.c
+@@ -6972,21 +6972,51 @@ void ui_frame(void)
+     if (kr.on) {                                 /* the secret: the whole screen, twenty frames a second */
+         runner_update();
+         if (ui.frame % 3u == 0u) {
++#if DARK1_MIRROR
++            mirror_begin(240u);
++#endif
+             runner_draw(0);
+             cv_blit(0, 0);
+             runner_draw(1);
+             cv_blit(0, 120);
++#if DARK1_MIRROR
++            mirror_finish();
++#endif
+         }
+         runner_leds();
+         ui.frame++;
+         return;
+     }
+     cv_scan = ui.scan;
++#if DARK1_MIRROR
++    {
++        static uint32_t last_motion, last_page;
++        const uint32_t motion = (int32_t)(ui.turn_t - ui.act_t) > 0 ? ui.turn_t : ui.act_t;
++        const uint32_t page = ui.view | (uint32_t)ui.fx_menu << 8 | (uint32_t)ui.fx_page << 16;
++        if (motion != last_motion && !ui.saver_on)
++            mirror_focus(page != last_page ? KNB_Y : KNB_Y + 32u, 24u, motion);
++        last_motion = motion;
++        last_page = page;
++        const unsigned top = mirror_next();
++        if (ui.saver_on) {
++            if (ui.frame % 4u == 0u) mirror_begin(240u);
++        } else if (top < MAIN_Y) {
++            if (ui.frame % 2u == 0u && mirror_begin(MAIN_Y)) ui.sig[0] = 0;
++        } else if (top < KNB_Y) {
++            if (ui.frame % 2u == 0u && mirror_begin(KNB_Y)) ui.sig[1] = 0;
++        } else {
++            if (mirror_begin(240u)) ui.sig[2] = 0;
++        }
++    }
++#endif
+     if (!ui.saver_on)
+         draw_header();                           /* (the screensaver has the whole screen) */
+     draw_main();
+     if (!ui.saver_on)
+         draw_knobs();
++#if DARK1_MIRROR
++    mirror_finish();
++#endif
+     leds();
+     ui.frame++;
+ }
+diff --git a/firmware/src/lcd.c b/firmware/src/lcd.c
+index 9d2bb37..593766a 100644
+--- a/firmware/src/lcd.c
++++ b/firmware/src/lcd.c
+@@ -78,6 +78,9 @@ static void lcd_fill(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint16_t c)
+         w = 240u - x;
+     if (y + h > 240u)
+         h = 240u - y;
++#if DARK1_MIRROR
++    mirror_clear(x, y, w, h, c);
++#endif
+     lcd_sync();
+     k = 240u / w * w;                       /* whole rows per transfer (narrow fills: one DMA) */
+     for (i = 0; i < k; i++)
+@@ -96,6 +99,9 @@ static void lcd_blit(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint1
+         return;
+     lcd_window(x, y, x + w - 1u, y + h - 1u);
+     lcd_data(px, w * h * 2u);
++#if DARK1_MIRROR
++    mirror_blit(x, y, w, h, px);
++#endif
+ }
+ 
+ /* ST7789V init: reset, then 16-bit colour, scan direction and IPS inversion;
+diff --git a/firmware/src/main.c b/firmware/src/main.c
+index 8de2241..c2b0424 100644
+--- a/firmware/src/main.c
++++ b/firmware/src/main.c
+@@ -20,6 +20,8 @@
+ #include "fm1_probe.h"
+ 
+ #include "libc.c"
++#define DARK1_MIRROR 1
++#include "dark1_mirror.c"
+ #include "lcd.c"
+ #include "gfx.c"
+ 
+diff --git a/firmware/src/usb.c b/firmware/src/usb.c
+index 59f367d..8bd6176 100644
+--- a/firmware/src/usb.c
++++ b/firmware/src/usb.c
+@@ -702,6 +702,16 @@ static void sysex_byte(uint8_t b)
+         uint32_t i, ok = usb.sx_len == 6u;
+         for (i = 0; ok && i < 6u; i++)
+             ok = usb.sysex[i] == UBOOT_KEY[i];
++#if DARK1_MIRROR
++        if (usb.sx_len == 6u && usb.sysex[1] == 0x7D && usb.sysex[2] == 'F' &&
++            usb.sysex[3] == 'S' && usb.sysex[4] <= 1u) {
++            mirror_request = 1;
++            if (usb.sysex[4] == 1u) mirror_full_request = 1;
++            sx_collect = 0;
++            usb.sx_on = 0;
++            return;
++        }
++#endif
+         if (ok)
+             usb.uboot_req = 1;
+ #if FELUCCA_OTA

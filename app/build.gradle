@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+android {
+    namespace 'com.pfkellogg.fm1mirror'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.josxtm.dark1mirror'
+        minSdk 30
+        targetSdk 35
+        versionCode 2
+        versionName '1.0-comp.2'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+
+def wire = layout.buildDirectory.file('fixtures/screen.sysex')
+def buildFixture = tasks.register('buildMirrorFixture') {
+    inputs.files(rootProject.file('tests/sender.c'), rootProject.fileTree('firmware'))
+    outputs.file(wire)
+    doLast {
+        def path = wire.get().asFile
+        path.parentFile.mkdirs()
+        def executable = new File(path.parentFile, 'sender')
+        rootProject.exec {
+            commandLine 'cc', '-std=c99', '-O2', '-Ifirmware', 'tests/sender.c', '-o', executable
+        }
+        rootProject.exec {
+            commandLine executable, path
+        }
+    }
+}
+tasks.withType(Test).configureEach {
+    dependsOn buildFixture
+    systemProperty 'dark1.wire', wire.get().asFile.absolutePath
+}
