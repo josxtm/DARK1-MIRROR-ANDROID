@@ -51,6 +51,32 @@ class ScreenStreamTest {
         assertArrayEquals(valid, messages.single())
     }
 
+    @Test fun frameBatchesDirtyRowsUntilConsumed() {
+        val frame = ScreenFrame()
+        fun row(y: Int) = byteArrayOf(
+            0xf0.toByte(), 0x7d, 70, 83, 1, (y % 128).toByte(), (y / 128).toByte(),
+            0, 0, 1, 0, 112, 3, 0xf7.toByte()
+        )
+
+        assertTrue(frame.paint(row(22)))
+        assertFalse(frame.paint(row(24)))
+        assertEquals(2L, frame.packetCount())
+        frame.consume { pixels, top, bottom ->
+            assertEquals(22, top)
+            assertEquals(25, bottom)
+            assertEquals(0xffff0000.toInt(), pixels[22 * 240])
+        }
+        frame.consume { _, _, _ -> fail("Clean frame copied twice") }
+        assertTrue(frame.paint(row(25)))
+        frame.reset()
+        assertEquals(0L, frame.packetCount())
+        frame.consume { pixels, top, bottom ->
+            assertEquals(0, top)
+            assertEquals(240, bottom)
+            assertEquals(0xff000000.toInt(), pixels[25 * 240])
+        }
+    }
+
     @Test fun recognizesFirmwareIdentity() {
         val dark = byteArrayOf(0xf0.toByte(), 0x7d, 70, 83, 3) + "DARK-1 1.0.7 BigScreen".toByteArray() + 0xf7.toByte()
         assertEquals("DARK-1 1.0.7 BigScreen", Codec.firmwareInfo(dark))

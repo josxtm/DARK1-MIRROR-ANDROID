@@ -2,11 +2,11 @@
 
 APK nativa en Kotlin para ampliar la pantalla de un M-VAVE FM-1 por USB-MIDI. Incluye el emulador oficial DARK-1 1.0.7, compilado a WebAssembly y empaquetado para uso local.
 
-El modo espejo requiere la variante **DARK-1 1.0.7 BigScreen**. Esta compilación es una candidata de laboratorio. La cadena de decodificación se ha comprobado en pruebas simuladas. La sincronización y la compatibilidad USB en un FM-1 físico siguen pendientes.
+El modo espejo requiere un firmware DARK-1 BigScreen. La revisión original de BigScreen funcionó en la unidad del usuario. La versión Fast mejora el transporte y conserva los mismos mensajes Big Screen. Las mediciones de latencia y audio de Fast en el FM-1 físico siguen pendientes.
 
 - [Instalación, conexión y revisión del hardware](docs/INSTALACION.md)
 - [Protocolo USB-MIDI](docs/PROTOCOLO.md)
-- [Informe y plan de pruebas físicas](docs/PRUEBAS.md)
+- [Rendimiento de la versión rápida](docs/RENDIMIENTO.md) · [Informe inicial y plan de pruebas físicas](docs/PRUEBAS.md)
 
 ## Compilar
 
@@ -16,11 +16,11 @@ En Linux, con JDK 17, SDK Android 35, Build Tools 35.0.0 y un compilador C:
 ./gradlew :app:assembleDebug :app:testDebugUnitTest
 ```
 
-El APK se genera en `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions lo empaqueta como `DARK1-MIRROR-TABLET_v1.0-comp.1.apk`. La firma de depuración sirve para instalación directa de esta compilación.
+El APK se genera en `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions lo empaqueta como `DARK1-MIRROR-TABLET_v1.0-comp.2.apk`. La firma de depuración sirve para instalación directa de esta compilación.
 
 `scripts/build-upstream.sh emulator` reconstruye los recursos locales. Requiere Python 3, Pillow y Clang con destino wasm32. Se usó WASI SDK 25. Las pruebas del emulador se ejecutan con `node tests/emulator.cjs`, Playwright y Chromium.
 
-`scripts/build-upstream.sh firmware` reconstruye el paquete auxiliar. Usa el toolchain JieLi `20260730.1` y el SDK AC79NN V1.2.1, commit `d179b4484759423312073f5fbb232501aa491047`. Configura `JIELI_TOOLCHAIN` y `AC79_SDK` antes de ejecutarlo. El resultado queda en `build/DARK1-BigScreen-v1.0.7.fwsc`. Consulta las instrucciones del proyecto para obtener las dependencias. [Compilación de DARK-1](https://github.com/sparky480v/Dark-1/blob/6c0cc34677c4188575158c9ea5f53c95200be4a0/BUILDING.md)
+`scripts/build-upstream.sh firmware` reconstruye el paquete auxiliar. Usa el toolchain JieLi `20260730.1` y el SDK AC79NN V1.2.1, commit `d179b4484759423312073f5fbb232501aa491047`. Configura `JIELI_TOOLCHAIN` y `AC79_SDK` antes de ejecutarlo. El resultado queda en `build/DARK1-BigScreen-v1.0.7-fast.fwsc`. Consulta las instrucciones del proyecto para obtener las dependencias. [Compilación de DARK-1](https://github.com/sparky480v/Dark-1/blob/6c0cc34677c4188575158c9ea5f53c95200be4a0/BUILDING.md)
 
 ## Código y licencias
 

@@ -16,8 +16,9 @@ import java.io.IOException
 internal class MirrorMidi(
     context: Context,
     private val onState: (String) -> Unit,
-    private val onMessage: (ByteArray) -> Unit,
-    private val onReset: () -> Unit
+    val frame: ScreenFrame,
+    private val onFrame: () -> Unit,
+    private val onFirmware: (String?) -> Unit
 ) {
     private val manager = context.getSystemService(MidiManager::class.java)
     private val thread = HandlerThread("DARK-1 USB MIDI").apply { start() }
@@ -29,6 +30,7 @@ internal class MirrorMidi(
     private var input: MidiInputPort? = null
     private var output: MidiOutputPort? = null
     private var receivedRows = false
+    private var firmware: String? = null
 
     private val tick = object : Runnable {
         override fun run() {
@@ -94,8 +96,7 @@ internal class MirrorMidi(
                 } else {
                     val stream = ScreenStream { message ->
                         if (attempt == generation) {
-                            if (ScreenStream.validRow(message)) receivedRows = true
-                            onMessage(message)
+                            receive(message)
                         }
                     }
                     output?.connect(object : MidiReceiver() {
@@ -111,6 +112,22 @@ internal class MirrorMidi(
         handler.postDelayed({ if (attempt == generation && input == null) disconnect() }, 3000)
     }
 
+    private fun receive(message: ByteArray) {
+        val reported = Codec.firmwareInfo(message)?.let { Codec.firmwareName(it, null) }
+        if (reported != null && reported != firmware) {
+            firmware = reported
+            onFirmware(reported)
+            onState("${reported} · " + if (receivedRows) "recibiendo pantalla" else "esperando píxeles")
+        }
+        if (!ScreenStream.validRow(message)) return
+        val notify = frame.paint(message)
+        if (!receivedRows) {
+            receivedRows = true
+            onState("${firmware ?: "USB-MIDI"} · recibiendo pantalla")
+        }
+        if (notify) onFrame()
+    }
+
     private fun disconnect() {
         generation++
         selected = null
@@ -121,7 +138,10 @@ internal class MirrorMidi(
         output = null
         device = null
         receivedRows = false
-        onReset()
+        firmware = null
+        frame.reset()
+        onFirmware(null)
+        onFrame()
         onState("Esperando FM-1 por USB-C")
     }
 

@@ -35,13 +35,10 @@ class MainActivity : Activity() {
     private lateinit var detail: TextView
     private lateinit var mode: Button
     private lateinit var filter: Button
-    private val pixels = IntArray(240 * 240) { Color.BLACK }
+    private val frame = ScreenFrame()
     private val bitmap = Bitmap.createBitmap(240, 240, Bitmap.Config.ARGB_8888)
     private val paint = Paint()
     private val destination = RectF()
-    private var changed = false
-    private var scheduled = false
-    private var rows = 0L
     private var firmware: String? = null
     private var emulating = false
     private var expanded = false
@@ -86,6 +83,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 detailVisible = !detailVisible
                 detail.visibility = if (detailVisible) View.VISIBLE else View.GONE
+                if (detailVisible) updateDetail()
             }
         })
         fullscreen = Button(this).apply {
@@ -104,10 +102,10 @@ class MainActivity : Activity() {
         root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
         screen = object : View(this) {
             override fun onDraw(canvas: Canvas) {
-                if (changed) {
-                    bitmap.setPixels(pixels, 0, 240, 0, 0, 240, 240)
-                    changed = false
+                frame.consume { pixels, top, bottom ->
+                    bitmap.setPixels(pixels, top * 240, 240, 0, top, 240, bottom - top)
                 }
+                if (detailVisible && !expanded) updateDetail()
                 val side = minOf(width, height).toFloat()
                 val x = (width - side) / 2
                 val y = (height - side) / 2
@@ -119,43 +117,22 @@ class MainActivity : Activity() {
             setOnClickListener { if (expanded) showOnlyScreen(false) }
         }
         content.addView(screen, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        bitmap.eraseColor(Color.BLACK)
         midi = MirrorMidi(this, { value -> runOnUiThread {
             if (!emulating) status.text = value
-        } }, { message -> runOnUiThread {
-            if (!emulating) receive(message)
-        } }, { runOnUiThread {
-            pixels.fill(Color.BLACK)
-            rows = 0
-            firmware = null
-            changed = true
-            screen.invalidate()
+        } }, frame, { runOnUiThread {
+            if (!emulating) screen.postInvalidateOnAnimation()
+        } }, { identity -> runOnUiThread {
+            firmware = identity
             updateDetail()
         } })
         if (state?.getBoolean("emulator") == true) showEmulator(true)
     }
 
-    private fun receive(message: ByteArray) {
-        Codec.firmwareInfo(message)?.let {
-            firmware = Codec.firmwareName(it, null)
-            status.text = "${firmware} · " + if (rows == 0L) "esperando píxeles" else "recibiendo pantalla"
-            updateDetail()
-        }
-        if (!ScreenStream.validRow(message) || !Codec.apply(pixels, message)) return
-        if (rows++ == 0L) status.text = "${firmware ?: "USB-MIDI"} · recibiendo pantalla"
-        changed = true
-        if (!scheduled) {
-            scheduled = true
-            screen.postOnAnimation {
-                scheduled = false
-                screen.invalidate()
-                updateDetail()
-            }
-        }
-    }
-
     private fun updateDetail() {
-        detail.text = if (emulating) "Emulación local WebAssembly" else
-            "Firmware: ${firmware ?: "sin identificar"}    ·    Paquetes de pantalla: $rows"
+        val label = if (emulating) "Emulación local WebAssembly" else
+            "Firmware: ${firmware ?: "sin identificar"}    ·    Paquetes de pantalla: ${frame.packetCount()}"
+        if (detail.text != label) detail.text = label
     }
 
     private fun showOnlyScreen(enabled: Boolean) {

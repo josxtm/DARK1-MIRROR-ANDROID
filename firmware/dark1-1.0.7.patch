@@ -1,32 +1,28 @@
 diff --git a/firmware/src/app/main_fm1.c b/firmware/src/app/main_fm1.c
-index 2df41e9..c4e8593 100644
+index 2df41e9..95873f3 100644
 --- a/firmware/src/app/main_fm1.c
 +++ b/firmware/src/app/main_fm1.c
-@@ -553,6 +553,58 @@ static void px_service(void)
+@@ -553,6 +553,46 @@ static void px_service(void)
      }
  }
  
-+/* Submit at most one mirror packet per millisecond and let pending MIDI and
-+ * other SysEx go first. The USB driver never waits for the host here. */
++/* Wait for the previous SysEx to drain and yield to pending MIDI. The USB
++ * poll sets the pace, with only one display message in the USB ring. */
 +static int mirror_send(const uint8_t *message, unsigned length)
 +{
-+    static uint32_t last;
-+    const uint32_t now = fm1_ms;
-+    if (now == last || mo_r != mo_w || so_r != so_w ||
-+        usb_sysex_try(message, length) != 0)
++    if (mo_r != mo_w || so_r != so_w || usb_sysex_try(message, length) != 0)
 +        return -2;
-+    last = now;
 +    return 0;
 +}
 +
 +static void mirror_service(void)
 +{
++    static uint8_t identify;
 +    static const uint8_t identity[] = {
 +        0xf0, 0x7d, 'F', 'S', 3,
 +        'D', 'A', 'R', 'K', '-', '1', ' ', '1', '.', '0', '.', '7', ' ', 'B', 'i', 'g', 'S', 'c', 'r', 'e', 'e', 'n',
-+        0xf7
++        ' ', 'F', 'a', 's', 't', 0xf7
 +    };
-+    const uint32_t now = fm1_ms;
 +    if (mirror_request) {
 +        const uint32_t flags = irq_save();
 +        const uint8_t full = mirror_full_request;
@@ -34,34 +30,26 @@ index 2df41e9..c4e8593 100644
 +        irq_restore(flags);
 +        const uint8_t hello[] = { 0xf0, 0x7d, 'F', 'S', full, 0xf7 };
 +        sm_sysex(hello, sizeof hello);
-+        mirror_identify = 1;
++        identify = 1;
 +    }
-+    sm_poll(now, mirror_send);
++    sm_poll(fm1_ms, mirror_send);
 +    if (sm_take_full_request()) {
 +        sm_length = sm_sent = 0;
-+        mirror_ready = 0;
-+        mirror_top = 0;
++        mirror_reset();
 +    }
 +    if (!sm_on()) {
 +        mirror_ready = 0;
 +        return;
 +    }
-+    if (mirror_identify && mirror_send(identity, sizeof identity) == 0)
-+        mirror_identify = 0;
-+    if (mirror_ready && !sm_length) {
-+        const unsigned row = mirror_row;
-+        if (sm_rows(mirror_pixels[row], 0, mirror_top + row, MIRROR_WIDTH, 1) &&
-+            ++mirror_row == MIRROR_BAND) {
-+            mirror_ready = 0;
-+            mirror_top = (mirror_top + MIRROR_BAND) % MIRROR_WIDTH;
-+        }
-+    }
++    if (identify && mirror_send(identity, sizeof identity) == 0)
++        identify = 0;
++    mirror_stage();
 +}
 +
  static uint32_t prof_clk(void) { return fm1_ticks(); }
  static void tel_service(void)
  {
-@@ -835,6 +887,7 @@ static void fm1_main(void)
+@@ -835,6 +875,7 @@ static void fm1_main(void)
          tel_service();
          dx_service();
          px_service();
@@ -70,15 +58,15 @@ index 2df41e9..c4e8593 100644
          if (usb.ota_req) {
              usb.ota_req = 0;
 diff --git a/firmware/src/app/ui.c b/firmware/src/app/ui.c
-index f8e7fbb..0232a81 100644
+index f8e7fbb..2703c9b 100644
 --- a/firmware/src/app/ui.c
 +++ b/firmware/src/app/ui.c
-@@ -6972,21 +6972,38 @@ void ui_frame(void)
+@@ -6972,21 +6972,51 @@ void ui_frame(void)
      if (kr.on) {                                 /* the secret: the whole screen, twenty frames a second */
          runner_update();
          if (ui.frame % 3u == 0u) {
 +#if DARK1_MIRROR
-+            mirror_begin();
++            mirror_begin(240u);
 +#endif
              runner_draw(0);
              cv_blit(0, 0);
@@ -94,11 +82,24 @@ index f8e7fbb..0232a81 100644
      }
      cv_scan = ui.scan;
 +#if DARK1_MIRROR
-+    if (ui.frame % 4u == 0u && mirror_begin()) {
-+        const unsigned bottom = mirror_top + MIRROR_BAND;
-+        if (mirror_top < MAIN_Y) ui.sig[0] = 0;
-+        if (bottom > MAIN_Y && mirror_top < KNB_Y) ui.sig[1] = 0;
-+        if (bottom > KNB_Y) ui.sig[2] = 0;
++    {
++        static uint32_t last_motion, last_page;
++        const uint32_t motion = (int32_t)(ui.turn_t - ui.act_t) > 0 ? ui.turn_t : ui.act_t;
++        const uint32_t page = ui.view | (uint32_t)ui.fx_menu << 8 | (uint32_t)ui.fx_page << 16;
++        if (motion != last_motion && !ui.saver_on)
++            mirror_focus(page != last_page ? KNB_Y : KNB_Y + 32u, 24u, motion);
++        last_motion = motion;
++        last_page = page;
++        const unsigned top = mirror_next();
++        if (ui.saver_on) {
++            if (ui.frame % 4u == 0u) mirror_begin(240u);
++        } else if (top < MAIN_Y) {
++            if (ui.frame % 2u == 0u && mirror_begin(MAIN_Y)) ui.sig[0] = 0;
++        } else if (top < KNB_Y) {
++            if (ui.frame % 2u == 0u && mirror_begin(KNB_Y)) ui.sig[1] = 0;
++        } else {
++            if (mirror_begin(240u)) ui.sig[2] = 0;
++        }
 +    }
 +#endif
      if (!ui.saver_on)

@@ -21,9 +21,9 @@ case "${1:-}" in
         : "${AC79_SDK:?Set AC79_SDK to the pinned AC79 SDK checkout}"
         git -C "$scratch" apply "$root/firmware/dark1-1.0.7.patch"
         cp "$root"/firmware/{dark1_mirror.c,screen_mirror.c,screen_mirror.h} "$scratch/firmware/src/"
-        (cd "$scratch" && ./build.sh --release 1.0.7-bigscreen)
+        (cd "$scratch" && ./build.sh --release 1.0.7-fast)
         mkdir -p "$root/build"
-        cp "$scratch/build/DARK-1-1.0.7-bigscreen.fwsc" "$root/build/DARK1-BigScreen-v1.0.7.fwsc"
+        cp "$scratch/build/DARK-1-1.0.7-fast.fwsc" "$root/build/DARK1-BigScreen-v1.0.7-fast.fwsc"
         ;;
     *) echo "Usage: $0 emulator|firmware" >&2; exit 2 ;;
 esac
